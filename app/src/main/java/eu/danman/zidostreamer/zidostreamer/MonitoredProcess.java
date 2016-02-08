@@ -3,7 +3,6 @@ package eu.danman.zidostreamer.zidostreamer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Allows to monitor a {@link Process} and resurrect it upon its untimely death.
@@ -81,7 +80,7 @@ public class MonitoredProcess {
         if (stopped) {
             return;
         }
-        if (!process.isAlive()) {
+        if (!isAlive()) {
             start();
         }
     }
@@ -91,12 +90,13 @@ public class MonitoredProcess {
     }
 
     private void waitForStop() {
+        long timeout = System.currentTimeMillis() + (10 * 1000);
         try {
-            process.waitFor(10, TimeUnit.SECONDS);
-            process.exitValue();
-        } catch (InterruptedException | IllegalThreadStateException e) {
+            while (System.currentTimeMillis() < timeout && isAlive()) {
+                Thread.sleep(100);
+            }
+        } catch (InterruptedException e) {
             e.printStackTrace();
-            process.destroyForcibly();
         }
     }
 
@@ -124,6 +124,15 @@ public class MonitoredProcess {
 
     public boolean isKeptAlive() {
         return !stopped;
+    }
+
+    private boolean isAlive() {
+        try {
+            process.exitValue();
+            return false;
+        } catch (IllegalThreadStateException e) {
+            return true;
+        }
     }
 
     public OutputStream getOutputStream() {
