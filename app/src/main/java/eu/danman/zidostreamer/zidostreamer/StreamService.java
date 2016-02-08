@@ -131,20 +131,9 @@ public class StreamService extends Service {
         return c; // returns null if camera is unavailable
     }
 
-    boolean isProcessRunning(Process process){
-
-        try {
-            process.exitValue();
-        } catch (IllegalThreadStateException e){
-            return true;
-        }
-
-        return false;
-    }
-
     android.hardware.Camera mCamera = null;
     MediaRecorder mMediaRecorder = null;
-    Process ffmpegProcess = null;
+    MonitoredProcess ffmpegProcess = null;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -231,11 +220,12 @@ public class StreamService extends Service {
 
         try {
 
-            ffmpegProcess = Runtime.getRuntime().exec(cmd);
+            ffmpegProcess = new MonitoredProcess(cmd);
+            ffmpegProcess.start();
 
             final BufferedReader in = new BufferedReader(new InputStreamReader(ffmpegProcess.getErrorStream()));
 
-            final Process thisFFMPEG = ffmpegProcess;
+            final MonitoredProcess thisFFMPEG = ffmpegProcess;
 
             // create logger thread
             Thread thread = new Thread() {
@@ -246,7 +236,7 @@ public class StreamService extends Service {
 
                     try {
 
-                        while(isProcessRunning(thisFFMPEG)) {
+                        while(thisFFMPEG.isKeptAlive()) {
 
                             log = in.readLine();
 
@@ -341,6 +331,8 @@ public class StreamService extends Service {
 
         final ParcelFileDescriptor finalreadFD = readFD;
 
+        final MonitoredProcess thisFFMPEG = ffmpegProcess;
+
         Thread readerThread = new Thread() {
             @Override
             public void run() {
@@ -350,36 +342,39 @@ public class StreamService extends Service {
 
                 OutputStream ffmpegInput = ffmpegProcess.getOutputStream();
 
-                //while (true) {
+                final FileInputStream reader = new FileInputStream(finalreadFD.getFileDescriptor());
 
-                    final FileInputStream reader = new FileInputStream(finalreadFD.getFileDescriptor());
-
-                    try {
-
-                        while (true) {
-
-                            //if (reader.available() > 0){
-
-                            read = reader.read(buffer);
-
-                            ffmpegInput.write(buffer, 0, read);
-
-                            //}
-
-                        }
-
-                    } catch (IOException e) {
-                        e.printStackTrace();
-
-                        onDestroy();
-
+                try {
+                    while (thisFFMPEG.isKeptAlive()) {
+                        read = reader.read(buffer);
+                        ffmpegInput.write(buffer, 0, read);
                     }
-
-                //}
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    onDestroy();
+                }
             }
         };
 
         readerThread.start();
+
+        Thread monitorThread = new Thread() {
+            public void run() {
+                while (thisFFMPEG.isKeptAlive()) {
+                    try {
+                        thisFFMPEG.monitor();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    try {
+                        sleep(100);
+                    } catch (InterruptedException e) {
+                    }
+                }
+            };
+        };
+
+        monitorThread.start();
 
 
         // Step 5: Set the preview output
@@ -436,7 +431,7 @@ public class StreamService extends Service {
 
     private void stopFFMPEG(){
         if (ffmpegProcess != null){
-            ffmpegProcess.destroy();
+            ffmpegProcess.stop();
         }
         ffmpegProcess = null;
     }
