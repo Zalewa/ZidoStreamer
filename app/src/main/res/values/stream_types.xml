@@ -3,11 +3,13 @@
     <string-array name="listStreamTypes">
         <item>MPEG-TS</item>
         <item>RTMP</item>
+        <item>MPJPEG + WAV (next port)</item>
     </string-array>
 
     <string-array name="listStreamTypesId">
         <item>1</item>
         <item>2</item>
+        <item>3</item>
     </string-array>
 
 </resources>
