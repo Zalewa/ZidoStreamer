@@ -32,34 +32,33 @@ public class MonitoredProcess {
     }
 
     public synchronized void start() throws IOException {
-        if (!stopped) {
-            return;
+        if (stopped || !isAlive()) {
+            try {
+                stopped = false;
+                process = Runtime.getRuntime().exec(cmd);
+                outputStream = new OutputStream() {
+                    @Override
+                    public void write(int b) throws IOException {
+                        process.getOutputStream().write(b);
+                    }
+                };
+                inputStream = new InputStream() {
+                    @Override
+                    public int read() throws IOException {
+                        return process.getInputStream().read();
+                    }
+                };
+                errorStream = new InputStream() {
+                    @Override
+                    public int read() throws IOException {
+                        return process.getErrorStream().read();
+                    }
+                };
+            } catch (RuntimeException e) {
+                stop();
+                throw e;
+            }
         }
-        try {
-            stopped = false;
-        } catch (RuntimeException e) {
-            stop();
-            throw e;
-        }
-        process = Runtime.getRuntime().exec(cmd);
-        outputStream = new OutputStream() {
-            @Override
-            public void write(int b) throws IOException {
-                process.getOutputStream().write(b);
-            }
-        };
-        inputStream = new InputStream() {
-            @Override
-            public int read() throws IOException {
-                return process.getInputStream().read();
-            }
-        };
-        errorStream = new InputStream() {
-            @Override
-            public int read() throws IOException {
-                return process.getErrorStream().read();
-            }
-        };
     }
 
     public synchronized void stop() {

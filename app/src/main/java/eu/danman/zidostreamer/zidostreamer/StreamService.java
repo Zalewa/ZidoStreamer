@@ -31,6 +31,7 @@ import java.io.OutputStream;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.security.Provider;
+import java.util.List;
 
 
 public class StreamService extends Service {
@@ -134,6 +135,7 @@ public class StreamService extends Service {
     android.hardware.Camera mCamera = null;
     MediaRecorder mMediaRecorder = null;
     MonitoredProcess ffmpegProcess = null;
+    boolean monitoring = true;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -166,9 +168,7 @@ public class StreamService extends Service {
         }
 
         // try cleanup first
-        stopFFMPEG();
-        releaseMediaRecorder();
-        releaseCamera();
+        onDestroy();
 
         enableHDMI();
 
@@ -216,51 +216,11 @@ public class StreamService extends Service {
 //        String cmd =  ffmpegBin + " -i -  -strict -2 -codec:v copy -codec:a aac -b:a 128k -f flv rtmp://a.rtmp.youtube.com/live2/daniel.kucera.eu6p-a3wb-ew7h-06ks";
 //        String cmd =  ffmpegBin + "k -i udp://:12345 -codec:v copy -codec:a copy -f flv rtmp://a.rtmp.youtube.com/live2/daniel.kucera.eu6p-a3wb-ew7h-06ks";
 
-        Log.d("starting ffmpeg", cmd);
-
+        monitoring = true;
         try {
-
-            ffmpegProcess = new MonitoredProcess(cmd);
-            ffmpegProcess.start();
-
-            final BufferedReader in = new BufferedReader(new InputStreamReader(ffmpegProcess.getErrorStream()));
-
-            final MonitoredProcess thisFFMPEG = ffmpegProcess;
-
-            // create logger thread
-            Thread thread = new Thread() {
-                @Override
-                public void run() {
-
-                    String log = null;
-
-                    try {
-
-                        while(thisFFMPEG.isKeptAlive()) {
-
-                            log = in.readLine();
-
-                            if ((log != null) && (log.length() > 0)){
-                                Log.d("ffmpeg", log);
-                            } else {
-                                sleep(100);
-                            }
-
-                        }
-
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-            };
-
-            thread.start();
-
+            startFfmpegProcess(cmd);
         } catch (IOException e) {
             e.printStackTrace();
-
             return Service.START_NOT_STICKY;
         }
 
@@ -329,52 +289,8 @@ public class StreamService extends Service {
 
         //final BufferedInputStream bufferedReader = new BufferedInputStream(reader);
 
-        final ParcelFileDescriptor finalreadFD = readFD;
-
-        final MonitoredProcess thisFFMPEG = ffmpegProcess;
-
-        Thread readerThread = new Thread() {
-            @Override
-            public void run() {
-
-                byte[] buffer = new byte[8192];
-                int read = 0;
-
-                OutputStream ffmpegInput = ffmpegProcess.getOutputStream();
-
-                final FileInputStream reader = new FileInputStream(finalreadFD.getFileDescriptor());
-
-                try {
-                    while (thisFFMPEG.isKeptAlive()) {
-                        read = reader.read(buffer);
-                        ffmpegInput.write(buffer, 0, read);
-                    }
-                } catch (IOException e) {
-                    e.printStackTrace();
-                    onDestroy();
-                }
-            }
-        };
-
-        readerThread.start();
-
-        Thread monitorThread = new Thread() {
-            public void run() {
-                while (thisFFMPEG.isKeptAlive()) {
-                    try {
-                        thisFFMPEG.monitor();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                    try {
-                        sleep(100);
-                    } catch (InterruptedException e) {
-                    }
-                }
-            };
-        };
-
-        monitorThread.start();
+        startFfmpegPiping(readFD);
+        startMonitorThread();
 
 
         // Step 5: Set the preview output
@@ -404,10 +320,103 @@ public class StreamService extends Service {
         Toast.makeText(this, "Recording started",Toast.LENGTH_LONG);
 
         return Service.START_STICKY;
-
     }
 
+    private void startFfmpegProcess(String cmd) throws IOException {
+        Log.d("starting ffmpeg", cmd);
+        ffmpegProcess = new MonitoredProcess(cmd);
+        ffmpegProcess.start();
+
+        final BufferedReader in = new BufferedReader(new InputStreamReader(ffmpegProcess.getErrorStream()));
+
+        final MonitoredProcess thisFFMPEG = ffmpegProcess;
+
+        // create logger thread
+        Thread thread = new Thread() {
+            @Override
+            public void run() {
+
+                String log = null;
+
+                try {
+
+                    while(thisFFMPEG.isKeptAlive()) {
+
+                        log = in.readLine();
+
+                        if ((log != null) && (log.length() > 0)){
+                            Log.d("ffmpeg", log);
+                        } else {
+                            sleep(100);
+                        }
+
+                    }
+
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        };
+
+        thread.start();
+    }
+
+    private void startFfmpegPiping(final ParcelFileDescriptor readFD) {
+        Thread readerThread = new Thread() {
+            @Override
+            public void run() {
+                byte[] buffer = new byte[8192];
+
+                final FileInputStream reader = new FileInputStream(readFD.getFileDescriptor());
+
+                try {
+                    while (monitoring) {
+                        try {
+                            int read = reader.read(buffer);
+                            ffmpegProcess.getOutputStream().write(buffer, 0, read);
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                } finally {
+                    try {
+                        reader.close();
+                    } catch (IOException e) {
+                    }
+                    onDestroy();
+                }
+            }
+        };
+
+        readerThread.start();
+    }
+
+    private void startMonitorThread() {
+        Thread monitorThread = new Thread() {
+            public void run() {
+                while (monitoring) {
+                    try {
+                        ffmpegProcess.monitor();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    try {
+                        sleep(100);
+                    } catch (InterruptedException e) {
+                    }
+                }
+            };
+        };
+
+        monitorThread.start();
+    }
+
+    @Override
     public void onDestroy() {
+        monitoring = false;
+        stopFFMPEG();
         releaseMediaRecorder();       // if you are using MediaRecorder, release it first
         releaseCamera();              // release the camera immediately on pause event
     }
